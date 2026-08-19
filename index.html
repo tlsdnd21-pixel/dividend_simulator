@@ -95,14 +95,35 @@
 
   .section-title{font-size:13px;font-weight:800;color:var(--navy-soft);margin:2px 0 12px;text-transform:uppercase;letter-spacing:0.4px;}
 
+  .preset-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .preset-btn{
+    background:#FAFAFB;border:1px solid var(--border);border-radius:12px;
+    padding:12px 10px;text-align:left;cursor:pointer;
+    transition:background .15s, border-color .15s, transform .1s;
+  }
+  .preset-btn:active{transform:scale(0.97);}
+  .preset-btn.active{background:var(--coral-light);border-color:var(--coral);}
+  .preset-btn .p-name{font-size:13px;font-weight:800;color:var(--navy);margin-bottom:4px;}
+  .preset-btn .p-rate{font-size:11.5px;color:var(--navy-soft);font-weight:600;}
+  .preset-btn.active .p-name{color:var(--coral-dark);}
+
   .hero{
     background:linear-gradient(135deg,var(--navy) 0%,#232B45 100%);
     border-radius:18px;padding:22px 18px;color:#fff;margin-bottom:14px;
     box-shadow:0 8px 24px rgba(21,27,46,0.25);
   }
   .hero .label{font-size:12.5px;color:#B9BFD1;font-weight:600;margin-bottom:4px;}
-  .hero .big{font-size:30px;font-weight:800;letter-spacing:-0.5px;margin-bottom:16px;word-break:keep-all;}
+  .hero .big-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-bottom:16px;}
+  .hero .big{font-size:30px;font-weight:800;letter-spacing:-0.5px;word-break:keep-all;}
   .hero .big .unit{font-size:16px;font-weight:600;color:#B9BFD1;margin-left:2px;}
+  .return-badge{
+    display:inline-flex;align-items:center;
+    background:rgba(255,90,54,0.16);color:var(--coral);
+    font-size:13px;font-weight:800;
+    padding:4px 10px;border-radius:999px;
+    white-space:nowrap;
+  }
+  .return-badge.negative{background:rgba(255,255,255,0.12);color:#B9BFD1;}
   .hero .sub-row{display:flex;gap:12px;border-top:1px solid rgba(255,255,255,0.12);padding-top:14px;}
   .hero .sub{flex:1;}
   .hero .sub .label2{font-size:11.5px;color:#9AA1B8;margin-bottom:3px;}
@@ -160,7 +181,10 @@
 
   <div class="hero">
     <div class="label" id="heroLabel">10년 후 예상 평가금액</div>
-    <div class="big" id="heroValue">0<span class="unit">원</span></div>
+    <div class="big-row">
+      <div class="big" id="heroValue">0<span class="unit">원</span></div>
+      <div class="return-badge" id="returnBadge">+0.0%</div>
+    </div>
     <div class="sub-row">
       <div class="sub">
         <div class="label2">누적 배당금</div>
@@ -170,6 +194,28 @@
         <div class="label2">총 투자원금</div>
         <div class="val2" id="heroPrincipal">0<small>원</small></div>
       </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">투자 성향 프리셋</div>
+    <div class="preset-grid">
+      <button type="button" class="preset-btn" id="preset-highdiv" data-yield="5" data-growth="1">
+        <div class="p-name">고배당주<br>(금융·통신주)</div>
+        <div class="p-rate">수익률 5% · 증가율 1%</div>
+      </button>
+      <button type="button" class="preset-btn" id="preset-krgrowth" data-yield="3" data-growth="3">
+        <div class="p-name">국내 배당성장주</div>
+        <div class="p-rate">수익률 3% · 증가율 3%</div>
+      </button>
+      <button type="button" class="preset-btn" id="preset-usgrowth" data-yield="2" data-growth="6">
+        <div class="p-name">미국 배당성장주</div>
+        <div class="p-rate">수익률 2% · 증가율 6%</div>
+      </button>
+      <button type="button" class="preset-btn" id="preset-deposit" data-yield="3" data-growth="0">
+        <div class="p-name">정기예금</div>
+        <div class="p-rate">수익률 3% · 증가율 0%</div>
+      </button>
     </div>
   </div>
 
@@ -508,6 +554,7 @@
     $('yieldVal').textContent = yieldPct.toFixed(1) + '%';
     $('growthVal').textContent = growthPct.toFixed(1) + '%';
     $('yearsVal').textContent = years + '년';
+    markActivePreset();
 
     var reinvestResult = simulate(true, years, initial, monthly, yieldPct, growthPct);
     var noReinvestResult = simulate(false, years, initial, monthly, yieldPct, growthPct);
@@ -517,6 +564,11 @@
     $('heroValue').innerHTML = fmtEok(chosen.finalPortfolio) + '<span class="unit">원</span>';
     $('heroDividend').innerHTML = fmtEok(chosen.totalDividends) + '<small>원</small>';
     $('heroPrincipal').innerHTML = fmtEok(chosen.principal) + '<small>원</small>';
+
+    var returnPct = chosen.principal > 0 ? ((chosen.finalPortfolio - chosen.principal) / chosen.principal) * 100 : 0;
+    var badge = $('returnBadge');
+    badge.textContent = (returnPct >= 0 ? '+' : '') + returnPct.toFixed(1) + '%';
+    badge.classList.toggle('negative', returnPct < 0);
 
     drawLineChart(reinvestResult.snapshots, noReinvestResult.snapshots);
 
@@ -529,6 +581,26 @@
     $('donutPrincipalPct').textContent = '(' + Math.round(donutPrincipal / totalAsset * 100) + '%)';
     $('donutDividendPct').textContent = '(' + Math.round(donutDividend / totalAsset * 100) + '%)';
   }
+
+  // presets
+  var presetBtns = Array.prototype.slice.call(document.querySelectorAll('.preset-btn'));
+  function markActivePreset(){
+    var y = parseFloat(inputs.yieldPct.value);
+    var g = parseFloat(inputs.growthPct.value);
+    presetBtns.forEach(function(btn){
+      var by = parseFloat(btn.getAttribute('data-yield'));
+      var bg = parseFloat(btn.getAttribute('data-growth'));
+      var isActive = Math.abs(by - y) < 0.01 && Math.abs(bg - g) < 0.01;
+      btn.classList.toggle('active', isActive);
+    });
+  }
+  presetBtns.forEach(function(btn){
+    btn.addEventListener('click', function(){
+      inputs.yieldPct.value = btn.getAttribute('data-yield');
+      inputs.growthPct.value = btn.getAttribute('data-growth');
+      render();
+    });
+  });
 
   // wire up events
   inputs.initial.addEventListener('input', function(){ syncNumberFromRange(inputs.initial, inputs.initialNum); render(); });
