@@ -4,3 +4,6 @@ shorts_maker/**/*.mp4
 shorts_maker/**/*.MOV
 shorts_maker/**/*.mov
 __pycache__/
+shorts_maker/**/*_편집용/
+shorts_maker/**/*.wav
+shorts_maker/**/*.mp3
