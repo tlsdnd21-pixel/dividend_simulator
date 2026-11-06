@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import sys
@@ -53,8 +54,8 @@ DEFAULTS = {
 
 
 # ---------------------------------------------------------------- utils
-def run(cmd):
-    r = subprocess.run(cmd, capture_output=True, text=True)
+def run(cmd, cwd=None):
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd)
     if r.returncode != 0:
         sys.exit(f"명령 실패: {' '.join(map(str, cmd))}\n{r.stderr[-2000:]}")
     return r.stdout
@@ -108,13 +109,18 @@ def tts(text, voice, rate, out_path):
 # ---------------------------------------------------------------- scan
 def cmd_scan(folder):
     folder = Path(folder)
-    clips = sorted(p for p in folder.iterdir() if p.suffix.lower() in VIDEO_EXT)
+    skip = set()
+    if (folder / "project.yaml").exists():
+        skip.add((yaml.safe_load((folder / "project.yaml").read_text(encoding="utf-8")) or {}).get("output", DEFAULTS["output"]))
+    clips = sorted(p for p in folder.iterdir() if p.suffix.lower() in VIDEO_EXT and p.name not in skip)
     if not clips:
         sys.exit("영상 파일이 없습니다.")
+    ensure_fonts()
     sheet_dir = folder / "_preview"
     sheet_dir.mkdir(exist_ok=True)
     cuts = []
     for c in clips:
+        c = c.resolve()
         info = probe(c)
         print(f"{c.name:40s} {info['duration']:6.1f}초  {info['size']}  소리:{'O' if info['has_audio'] else 'X'}")
         # 1초 간격 썸네일을 한 장에 (초 표시 포함)
@@ -122,8 +128,8 @@ def cmd_scan(folder):
         cols = 6
         rows = max(1, -(-int(info["duration"]) // cols))
         run(["ffmpeg", "-y", "-v", "error", "-i", str(c), "-vf",
-             f"fps=1,scale=240:-2,drawtext=text='%{{pts\\:hms}}':x=6:y=6:fontsize=22:fontcolor=yellow:box=1:boxcolor=black@0.6,"
-             f"tile={cols}x{rows}", "-frames:v", "1", "-q:v", "4", str(sheet)])
+             f"fps=1,scale=240:-2,drawtext=fontfile=BlackHanSans-Regular.ttf:text='%{{pts\\:hms}}':x=6:y=6:fontsize=22:fontcolor=yellow:box=1:boxcolor=black@0.6,"
+             f"tile={cols}x{rows}", "-frames:v", "1", "-q:v", "4", str(sheet.resolve())], cwd=FONT_DIR)
         cuts.append({"clip": c.name, "start": 0.0, "end": round(min(info["duration"], 2.0), 1),
                      "say": "여기에 내레이션 문장"})
     draft = folder / "project.yaml"
@@ -178,7 +184,7 @@ def cmd_build(project):
     ensure_fonts()
     use_voice = str(cfg["voice"]).lower() not in ("none", "false", "")
     tmp = Path(tempfile.mkdtemp(prefix="short_"))
-    seg_files, events, t = [], [], 0.0
+    seg_files, events, say_list, t = [], [], [], 0.0
 
     for i, c in enumerate(cuts, 1):
         shots = c.get("shots") or [c]  # 한 문장 동안 여러 장면을 빠르게 넘길 때 shots 사용
@@ -219,45 +225,91 @@ def cmd_build(project):
                 achains.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{d:.3f}[o{k}]")
         n = len(shots)
         vf = ";".join(vchains) + ";" + "".join(f"[v{k}]" for k in range(n)) + f"concat=n={n}:v=1:a=0[v]"
-        af = achains + ["".join(f"[o{k}]" for k in range(n)) + f"concat=n={n}:v=0:a=1[oa]"]
-        mix = ["[oa]"]
+        af = achains + ["".join(f"[o{k}]" for k in range(n)) + f"concat=n={n}:v=0:a=1,apad,atrim=0:{dur:.3f}[orig]"]
         if voice_file:
             ins += ["-i", str(voice_file)]
-            af.append(f"[{n}:a]aresample=48000,aformat=channel_layouts=stereo[na]")
-            mix.append("[na]")
-        af.append(f"{''.join(mix)}amix=inputs={len(mix)}:duration=longest:normalize=0,apad,atrim=0:{dur:.3f}[a]")
+            af.append(f"[{n}:a]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=0:{dur:.3f}[voice]")
+        else:
+            af.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{dur:.3f}[voice]")
+        # 영상 1개 + 오디오 2개(현장음, 내레이션)를 따로 담아 둠 → 나중에 트랙별로 분리 저장
         seg = tmp / f"s{i:02d}.mp4"
         run(["ffmpeg", "-y", "-v", "error", *ins, "-filter_complex", ";".join([vf, *af]),
-             "-map", "[v]", "-map", "[a]", "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "veryfast",
-             "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", str(seg)])
+             "-map", "[v]", "-an", "-t", f"{dur:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+             "-pix_fmt", "yuv420p", str(seg),
+             "-map", "[orig]", "-c:a", "pcm_s16le", str(tmp / f"o{i:02d}.wav"),
+             "-map", "[voice]", "-c:a", "pcm_s16le", str(tmp / f"n{i:02d}.wav")])
         seg_files.append(seg)
+        say_list.append((i, say, dur))
         if text:
             events.append((t, t + dur, str(text), c.get("highlight")))
         print(f"[{i:2d}/{len(cuts)}] 장면 {n}개 → {dur:.2f}s  {say[:30]}")
         t += dur
 
-    lst = tmp / "list.txt"
-    lst.write_text("".join(f"file '{s}'\n" for s in seg_files))
-    joined = tmp / "joined.mp4"
-    run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(joined)])
+    # 이어 붙이기 (Windows 경로 문제를 피하려고 임시 폴더 안에서 상대 경로로 실행)
+    # 오디오는 무압축(wav)으로 이어 붙여서 끝까지 싱크가 어긋나지 않게
+    for name, files in (("joined.mp4", [s.name for s in seg_files]),
+                        ("orig.wav", [f"o{i:02d}.wav" for i, _, _ in say_list]),
+                        ("voice.wav", [f"n{i:02d}.wav" for i, _, _ in say_list])):
+        (tmp / "list.txt").write_text("".join(f"file '{f}'\n" for f in files), encoding="utf-8")
+        run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", name], cwd=tmp)
+    (tmp / "fonts").mkdir(exist_ok=True)
+    for f in FONT_DIR.glob("*.ttf"):
+        shutil.copy(f, tmp / "fonts" / f.name)
+    (tmp / "subs.ass").write_text(build_ass(cfg, events, t), encoding="utf-8")
+    (tmp / "title.ass").write_text(build_ass(cfg, [], t), encoding="utf-8")
 
-    ass = tmp / "subs.ass"
-    ass.write_text(build_ass(cfg, events, t), encoding="utf-8")
     out = (base / cfg["output"]).resolve()
-    sub_filter = f"ass={ass}:fontsdir={FONT_DIR}"
-    cmd = ["ffmpeg", "-y", "-v", "error", "-i", str(joined)]
+    parts = out.with_name(out.stem + "_편집용")
+    parts.mkdir(exist_ok=True)
+    (parts / "컷별영상").mkdir(exist_ok=True)
+    (parts / "컷별내레이션").mkdir(exist_ok=True)
+    ff = ["ffmpeg", "-y", "-v", "error"]
+    joined = str(tmp / "joined.mp4")
+
+    # 1) 자막 없는 영상 (소리 없음)
+    run([*ff, "-i", joined, "-map", "0:v", "-c", "copy", "-movflags", "+faststart", str(parts / "1_영상_자막없음.mp4")])
+    # 2) 내레이션 / 3) 현장음 — 영상과 길이가 같아 0초에 놓으면 싱크가 맞음
+    shutil.copy(tmp / "voice.wav", parts / "2_내레이션.wav")
+    shutil.copy(tmp / "orig.wav", parts / "3_현장음.wav")
+    # 4) 배경음악 (영상 길이에 맞춰 반복·자르기, 끝 1초 페이드아웃)
+    bgm_args = []
     if cfg["bgm"]:
-        cmd += ["-stream_loop", "-1", "-i", str(base / cfg["bgm"]),
-                "-filter_complex",
-                f"[0:v]{sub_filter}[v];[1:a]volume={cfg['bgm_volume']},afade=t=out:st={max(t - 1, 0):.2f}:d=1[b];"
-                f"[0:a][b]amix=inputs=2:duration=first:normalize=0[a]",
-                "-map", "[v]", "-map", "[a]"]
-    else:
-        cmd += ["-vf", sub_filter, "-map", "0:v", "-map", "0:a"]
-    cmd += ["-t", f"{t:.3f}", "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
-    run(cmd)
-    print(f"\n완성: {out}  ({t:.1f}초, 컷 {len(cuts)}개)")
+        run([*ff, "-stream_loop", "-1", "-i", str((base / cfg["bgm"]).resolve()), "-af",
+             f"volume={cfg['bgm_volume']},afade=t=out:st={max(t - 1, 0):.2f}:d=1", "-t", f"{t:.3f}",
+             "-c:a", "pcm_s16le", str(parts / "4_배경음악.wav")])
+        bgm_args = ["-i", str(parts / "4_배경음악.wav")]
+    # 5) 자막 SRT (캡컷 자막 가져오기용) + 강조색 포함 ASS
+    (parts / "5_자막.srt").write_text(build_srt(events), encoding="utf-8-sig")
+    shutil.copy(tmp / "subs.ass", parts / "5_자막_스타일포함.ass")
+    # 6) 위쪽 제목 투명 PNG (캡컷에서 오버레이로 올리기)
+    if cfg["title"]:
+        run([*ff, "-f", "lavfi", "-i", f"color=c=black@0.0:s={W}x{H},format=rgba", "-vf",
+             "ass=title.ass:fontsdir=fonts:alpha=1", "-frames:v", "1", str(parts / "6_제목.png")], cwd=tmp)
+    # 7) 컷별 영상 / 내레이션 (캡컷에서 순서 바꾸거나 일부만 교체할 때)
+    for (i, say, dur), seg in zip(say_list, seg_files):
+        run([*ff, "-i", str(seg), "-map", "0:v", "-c", "copy", str(parts / "컷별영상" / f"{i:02d}.mp4")])
+        if say:
+            shutil.copy(tmp / f"n{i:02d}.wav", parts / "컷별내레이션" / f"{i:02d}.wav")
+    (parts / "내레이션_대본.txt").write_text(
+        "\n".join(f"{i:02d}. ({dur:.1f}초) {say}" for i, say, dur in say_list), encoding="utf-8-sig")
+
+    # 완성본 (자막 + 내레이션 + 현장음 + 배경음악 합친 것)
+    n_a = 3 if bgm_args else 2
+    mix_in = "[1:a][2:a]" + ("[3:a]" if bgm_args else "")
+    run([*ff, "-i", "joined.mp4", "-i", "orig.wav", "-i", "voice.wav", *bgm_args, "-filter_complex",
+         f"[0:v]ass=subs.ass:fontsdir=fonts[v];{mix_in}amix=inputs={n_a}:duration=first:normalize=0[a]",
+         "-map", "[v]", "-map", "[a]", "-t", f"{t:.3f}", "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)], cwd=tmp)
+    shutil.rmtree(tmp, ignore_errors=True)
+    print(f"\n완성본: {out}  ({t:.1f}초, 컷 {len(cuts)}개)")
+    print(f"캡컷 편집용 파일: {parts}")
+
+
+def build_srt(events):
+    def ts(x):
+        ms = int(round(x * 1000))
+        return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+    return "\n".join(f"{k}\n{ts(a)} --> {ts(b)}\n{txt.strip()}\n" for k, (a, b, txt, _) in enumerate(events, 1))
 
 
 def main():
