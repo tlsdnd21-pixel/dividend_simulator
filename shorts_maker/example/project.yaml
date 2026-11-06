@@ -1,0 +1,35 @@
+# 참고 영상(서울 최고가 부대찌개, 24초 / 18컷) 구성을 그대로 옮긴 예시
+# clip  : 같은 폴더에 있는 내 영상 파일 이름
+# start / end : 그 영상에서 쓸 구간(초). 내레이션 길이에 맞춰 자동으로 늘어남
+# say   : AI가 읽을 문장 = 화면 자막 (자막만 다르게 하려면 text: 추가)
+# highlight : 노란색으로 강조할 단어
+
+output: 부대찌개_쇼츠.mp4
+title: |
+  서울 최고가 부대찌개 맛집
+  이 가격에도 사람으로 꽉 차는 곳
+voice: ko-KR-SunHiNeural      # 남자 목소리: ko-KR-InJoonNeural, 내레이션 끄기: none
+voice_rate: "+15%"
+bgm: null                     # 예: bgm.mp3
+original_audio_volume: 0.25   # 현장음(보글보글 소리) 살짝
+
+cuts:
+  # ── 훅 (0~3초)
+  # 한 문장 동안 장면을 여러 개 빠르게 넘기려면 shots 사용 (참고 영상처럼 1~1.5초 컷)
+  - say: "와 서울에서 가장 비싼 부대찌개집에 다녀왔습니다"
+    highlight: ["가장 비싼"]
+    shots:
+      - {clip: clip1.mp4, start: 0.0, end: 1.2}   # 냄비 들고 오는 장면
+      - {clip: clip2.mp4, start: 0.0, end: 1.0}   # 재료 붓는 손
+      - {clip: clip1.mp4, start: 6.0, end: 7.2}   # 끓는 클로즈업
+  # ── 가게·가격 (3~7초)
+  - {clip: clip2.mp4, start: 0.0, end: 1.0, say: "역삼 대우 부대찌개인데요"}
+  - {clip: clip1.mp4, start: 1.2, end: 2.5, say: "저희가 주문한 등심 부대찌개는"}
+  - {clip: clip2.mp4, start: 1.0, end: 2.5, say: "2인분에 무려 5만 원입니다", highlight: ["5만 원"]}
+  # ── 특징·맛 (7~15초)
+  - {clip: clip1.mp4, start: 2.5, end: 4.0, say: "일반 부대찌개와 다르게 한우 등심이 올라가고", highlight: ["한우 등심"]}
+  - {clip: clip2.mp4, start: 2.5, end: 4.0, say: "가장 특이한 건 미나리입니다", highlight: ["미나리"]}
+  - {clip: clip1.mp4, start: 4.0, end: 5.5, say: "국물은 진하면서도 끝맛이 깔끔하고"}
+  # ── 총평 (15초~)
+  - {clip: clip2.mp4, start: 4.0, end: 5.5, say: "40년 넘게 사랑받아 온 집인데"}
+  - {clip: clip1.mp4, start: 5.5, end: 7.0, say: "다만 이 가격은 솔직히 호불호가 갈릴 것 같습니다", highlight: ["호불호"]}

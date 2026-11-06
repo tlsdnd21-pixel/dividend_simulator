@@ -1,0 +1,6 @@
+shorts_maker/fonts/
+shorts_maker/**/_preview/
+shorts_maker/**/*.mp4
+shorts_maker/**/*.MOV
+shorts_maker/**/*.mov
+__pycache__/
